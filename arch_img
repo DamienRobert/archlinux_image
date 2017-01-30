@@ -1,6 +1,14 @@
 #!/bin/zsh
 #Inspired by https://github.com/lucasdemarchi/toolbox/blob/master/arch-installer.sh
+#requirements: arch-install-scripts
 set -e
+
+# Stolen from arch-install-script
+out() { printf "$1 $2\n" "${@:3}"; }
+error() { out "==> ERROR:" "$@"; } >&2
+msg() { out "==>" "$@"; }
+msg2() { out "  ->" "$@";}
+die() { error "$@"; exit 1; }
 
 write_file() {
 	local file=$1
@@ -8,29 +16,58 @@ write_file() {
 	cat >$file
 }
 
+pacstrap_cmd() {
+	pacstrap $pacstrap_options $rootfs $pacman_options $@
+}
+
 prepare_subvolume() {
 	#btrfs subvolume
 	rootfs="/var/lib/machines/$name"
-	[[ -e $rootfs ]] && exit 1
+	[[ -e $rootfs ]] && die "$rootfs exists"
 	btrfs subvolume create $rootfs
+}
+
+make_raw() {
+	raw="/var/lib/machines/$name.raw"
+	[[ -e $raw ]] && die "$raw exists"
+	touch $raw
+	chattr +C $raw
+	fallocate -l 1G $raw #dd of=archlinux.raw bs=1 seek=1G count=0
+}
+
+do_partition() {
+	BOOTPARTLABEL='boot' SLASHPARTLABEL='slash'
+	sgdisk -n 1:0:+100M -c "0:$BOOTPARTLABEL" -t '0:ef00' --attributes=1:set:2	-n 2:0:0 -c "0:$SLASHPARTLABEL" -t '0:8304' $DISK
+	bootpart=${DISK}1
+	slashpart=${DISK}2
+}
+
+do_mkfs() {
+	mkfs.vfat $bootpart
+	mkfs.ext4 $slashpart
+}
+
+do_mount() {
+	mkdir -p $rootfs && mount ${DISK}p2 $rootfs
+	mkdir -p $rootfs/boot && mount ${DISK}p1 $rootfs/boot
+}
+
+do_umount() {
+	umount $rootfs/boot; umount $rootfs
 }
 
 prepare_raw() {
 	#raw image
-	raw="/var/lib/machines/$name.raw"
-	[[ -e $raw ]] && exit 1
-	fallocate -l 1G $raw #dd of=archlinux.raw bs=1 seek=1G count=0
-	chattr +C $raw
+	make_raw
 	DISK=$(losetup -f --show $raw)
-	[[ -z $DISK ]] && exit 1
-	BOOTPARTLABEL='boot' SLASHPARTLABEL='slash'
-	sgdisk -n 1:0:+100M -c "0:$BOOTPARTLABEL" -t '0:ef00' --attributes=1:set:2  -n 2:0:0 -c "0:$SLASHPARTLABEL" -t '0:8304' $DISK
+	[[ -z $DISK ]] && die "losetup failed"
+	do_partition
 	partprobe $DISK #tells the kernel about the partitions
-	mkfs.vfat ${DISK}p1
-	mkfs.ext4 ${DISK}p2
+	bootpart=${DISK}p1
+	slashpart=${DISK}p2
+	do_mkfs
 	rootfs="/mnt/loop"
-	mkdir -p $rootfs && mount ${DISK}p2 $rootfs
-	mkdir -p $rootfs/boot && mount ${DISK}p1 $rootfs/boot
+	do_mount
 }
 
 prepare() {
@@ -47,10 +84,7 @@ prepare() {
 
 init() {
 	echo "# Init"
-	#trick: install 'linux' after /etc/mkinitcpio.conf, so that there is no need to call mkinitcpio -p linux again
-	base_pkgs=($(ruby -e 'puts (%x/pacman -Sqg base/.split("\n")-%w(mdadm lvm2 cryptsetup device-mapper xfsprogs reiserfsprogs jfsutils man-pages man-db pcmciautils inetutils dhcpcd netctl s-nail licenses texinfo linux)).join(" ")'))
-	pkgs=($base_pkgs openssh sudo)
-	pacstrap -cd $rootfs --needed $pkgs
+	pacstrap_cmd $pkgs
 }
 
 enable_networkd() {
@@ -105,10 +139,10 @@ options $cmdline
 EOS
 }
 
-prepare_boot() {
+setup_bootloader() {
 	echo "# Boot"
 	arch-chroot $rootfs bootctl install --no-variables
-	pacstrap -GMcd $rootfs --needed linux
+	pacstrap_cmd linux
 	write_mkinitcpio
 	write_systemd_boot
 	arch-chroot $rootfs mkinitcpio -p linux
@@ -122,64 +156,69 @@ cleanup() {
 	echo "# Cleanup"
 	case $machine_type in
 		raw)
-			#unmount
-			if [[ -n $rootfs ]]; then
-				umount $rootfs/boot; umount $rootfs
-			fi
+			[[ -n $rootfs ]] && do_umount
 			[[ $DISK == /dev/loop* ]] && losetup -d $DISK
 			;;
 	esac
 }
 
-default_bootstrap() {
-	prepare
-	init
-	configure
-	[[ -n $boot ]] && prepare_boot
+script_options() {
+	while true;
+	do
+		case $1 in
+			-- ) break ;;
+			-b|--boot ) shift; boot=t ;;
+			-t|--type ) shift; machine_type=$1; shift ;;
+			-k|--ssh-key ) shift; ssh_key=$1; shift ;;
+			-r|--run ) shift; run_list=${(s/,/)1}; shift ;;
+			--pkgs ) shift; pkgs=${(s/,/)1}; shift ;;
+			*) break;;
+		esac
+	done
+	name=$1; shift
 }
 
-#allows other scripts to source arch_img and change bootstrap()
-declare -f bootstrap >/dev/null || bootstrap() {
-	default_bootstrap
+script_setup() {
+	[[ -z $machine_type ]] && machine_type="btrfs"
+	if [[ -z $pkgs ]]; then
+		pkgs=($(ruby -e 'puts (%x/pacman -Sqg base/.split("\n")-%w(mdadm lvm2 cryptsetup device-mapper xfsprogs reiserfsprogs jfsutils man-pages man-db pcmciautils inetutils dhcpcd netctl s-nail licenses texinfo linux)).join(" ")'))
+		pkgs+=(openssh sudo)
+	fi
+	default_runlist=(prepare init ${boot:+setup_bootloader} configure)
+	[[ -z $runlist ]] && runlist=($default_runlist)
+	[[ -z $pacstrap_options ]] && pacstrap_options=("-GMcd")
+	[[ -z $pacman_options ]] && pacstrap_options=("--needed")
+
+	trap '
+		ret=$?;
+		cleanup
+		[[ $ret -ne 0 ]] && echo "FAILED TO GENERATE IMAGE" >&2
+		exit $ret;
+		' EXIT
+	# clean up also after a SIGINT
+	trap 'exit 1;' SIGINT
 }
 
-trap '
-  ret=$?;
-  cleanup
-  [[ $ret -ne 0 ]] && echo "FAILED TO GENERATE IMAGE" >&2
-  exit $ret;
-  ' EXIT
-# clean up also after a SIGINT
-trap 'exit 1;' SIGINT
+script_checkup() {
+	[[ $EUID != 0 ]] && die "Must be run as root"
+	[[ -z $name ]] && die "No name provided"
+}
 
-while true;
-do
-  case $1 in
-    -- ) break ;;
-    -b|--boot ) shift; boot=t ;;
-    -t|--type ) shift; machine_type=$1; shift ;;
-    -k|--ssh-key ) shift; ssh_key=$1; shift ;;
-    *) break;;
-  esac
-done
-
-[[ -z $machine_type ]] && machine_type="btrfs"
-name=$1; shift
-if [[ $EUID != 0 ]]; then
-	echo "Must be run as root"
-	exit 1
-fi
-if [[ -z $name ]]; then
-	echo "No name provided"
-	exit 1
-fi
-if [[ $# > 0 ]]; then
-	for func in $@; do
+script_run() {
+	for func in $runlist; do
 		eval $func
 	done
-else
-	bootstrap
-fi
+}
+
+script_launch() {
+	script_options $@
+	script_setup
+	script_checkup
+	script_run
+}
+
+script_launch $@
+
 
 #Build:
 #sudo arch_img arch-container #container
