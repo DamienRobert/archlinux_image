@@ -1,4 +1,4 @@
-# git_helpers
+# archlinux_image
 
 * [Homepage](https://github.com/DamienRobert/archlinux_image#readme)
 * [Email](mailto:Damien.Olivier.Robert+github at gmail.com)
