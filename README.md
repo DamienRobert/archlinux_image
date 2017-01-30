@@ -9,8 +9,10 @@ Inspired by [arch-installer](https://github.com/lucasdemarchi/toolbox/blob/maste
 
 ## Examples
 
+~~~ sh
 sudo arch_img arch-container #container
 sudo arch_img -b -t raw arch-virtual #bootable raw disk for qemu
+~~~
 
 ## Copyright
 
