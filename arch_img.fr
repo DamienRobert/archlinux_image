@@ -1,0 +1,22 @@
+#!/bin/zsh
+
+locales() {
+	write_file $rootfs/etc/locale.gen <<EOS
+en_US.UTF-8 UTF-8
+EOS
+	chroot $rootfs locale-gen
+	write_file $rootfs/etc/vconsole.conf <<EOS
+KEYMAP=fr-latin1
+FONT=lat1-16
+EOS
+	systemd-firstboot --root=$rootfs --locale="en_US.UTF-8" --timezone="Europe/Paris"
+}
+
+bootstrap() {
+	default_bootstrap
+	locales
+}
+
+. $HOME/script/archlinux/arch_img
+
+#sudo -E arch_img.fr -b -t raw arch-virtual-fr

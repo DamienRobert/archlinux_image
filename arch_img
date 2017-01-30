@@ -1,34 +1,36 @@
 #!/bin/zsh
+#Inspired by https://github.com/lucasdemarchi/toolbox/blob/master/arch-installer.sh
+set -e
 
 write_file() {
 	local file=$1
-	echo "- Write file $file"
-	sudo sh -c "cat >$file"
+	echo "- Writing $file"
+	cat >$file
 }
 
 prepare_subvolume() {
 	#btrfs subvolume
-	target="/var/lib/machines/$name"
-	[[ -e $target ]] && exit 1
-	sudo btrfs subvolume create $target || exit 1
+	rootfs="/var/lib/machines/$name"
+	[[ -e $rootfs ]] && exit 1
+	btrfs subvolume create $rootfs
 }
 
 prepare_raw() {
 	#raw image
 	raw="/var/lib/machines/$name.raw"
 	[[ -e $raw ]] && exit 1
-	sudo fallocate -l 1G $raw #dd of=archlinux.raw bs=1 seek=1G count=0
-	sudo chattr +C $raw
-	DISK=$(sudo losetup -f --show $raw)
+	fallocate -l 1G $raw #dd of=archlinux.raw bs=1 seek=1G count=0
+	chattr +C $raw
+	DISK=$(losetup -f --show $raw)
 	[[ -z $DISK ]] && exit 1
 	BOOTPARTLABEL='boot' SLASHPARTLABEL='slash'
-	sudo sgdisk -n 1:0:+100M -c "0:$BOOTPARTLABEL" -t '0:ef00' --attributes=1:set:2  -n 2:0:0 -c "0:$SLASHPARTLABEL" -t '0:8304' $DISK
-	sudo partprobe $DISK #tells the kernel about the partitions
-	sudo mkfs.vfat ${DISK}p1 || exit 1
-	sudo mkfs.ext4 ${DISK}p2 || exit 1
-	target="/mnt/loop"
-	sudo mkdir -p $target && sudo mount ${DISK}p2 $target || exit 1
-	sudo mkdir -p $target/boot && sudo mount ${DISK}p1 $target/boot || exit 1
+	sgdisk -n 1:0:+100M -c "0:$BOOTPARTLABEL" -t '0:ef00' --attributes=1:set:2  -n 2:0:0 -c "0:$SLASHPARTLABEL" -t '0:8304' $DISK
+	partprobe $DISK #tells the kernel about the partitions
+	mkfs.vfat ${DISK}p1
+	mkfs.ext4 ${DISK}p2
+	rootfs="/mnt/loop"
+	mkdir -p $rootfs && mount ${DISK}p2 $rootfs
+	mkdir -p $rootfs/boot && mount ${DISK}p1 $rootfs/boot
 }
 
 prepare() {
@@ -48,13 +50,13 @@ init() {
 	#trick: install 'linux' after /etc/mkinitcpio.conf, so that there is no need to call mkinitcpio -p linux again
 	base_pkgs=($(ruby -e 'puts (%x/pacman -Sqg base/.split("\n")-%w(mdadm lvm2 cryptsetup device-mapper xfsprogs reiserfsprogs jfsutils man-pages man-db pcmciautils inetutils dhcpcd netctl s-nail licenses texinfo linux)).join(" ")'))
 	pkgs=($base_pkgs openssh sudo)
-	sudo pacstrap -cd $target --needed $pkgs
+	pacstrap -cd $rootfs --needed $pkgs
 }
 
 enable_networkd() {
-	sudo ln -snf /run/systemd/resolve/resolv.conf $target/etc/
-	sudo sed -i -e 's/^hosts:.*/hosts: files mymachines resolve myhostname/' $target/etc/nsswitch.conf
-	write_file $target/etc/systemd/network/30-dhcp.network <<EOS
+	ln -snf /run/systemd/resolve/resolv.conf $rootfs/etc/
+	sed -i -e 's/^hosts:.*/hosts: files mymachines resolve myhostname/' $rootfs/etc/nsswitch.conf
+	write_file $rootfs/etc/systemd/network/30-dhcp.network <<EOS
 [Match]
 Name=en*
 [Network]
@@ -65,27 +67,27 @@ EOS
 
 configure() {
 	echo "# Configure"
-	sudo systemd-firstboot --root=$target --hostname=$name
-	sudo systemctl --root=$target preset-all
+	systemd-firstboot --root=$rootfs --hostname=$name
+	systemctl --root=$rootfs preset-all
 	enable_networkd
-	sudo systemctl --root=$target enable sshd.socket
-	[[ -n $ssh_key ]] && sudo mkdir -p $target/root/.ssh && sudo install -m 600 $ssh_key $target/root/.ssh/authorized_keys
+	systemctl --root=$rootfs enable sshd.socket
+	[[ -n $ssh_key ]] && mkdir -p $rootfs/root/.ssh && install -m 600 $ssh_key $rootfs/root/.ssh/authorized_keys
 }
 
 write_mkinitcpio() {
 	#unfortunately the 'autodetect' mkinitcpio hooks use the modules from the host rather than the ones from the container [since it has not booted yet], so we need to use the fallback initramfs to boot the vm the first time
-	write_file $target/etc/mkinitcpio.conf <<EOS
+	write_file $rootfs/etc/mkinitcpio.conf <<EOS
 HOOKS="systemd autodetect modconf block filesystems fsck"
 EOS
 }
 
 write_systemd_boot() {
-	write_file $target/boot/loader/loader.conf <<EOS
+	write_file $rootfs/boot/loader/loader.conf <<EOS
 default arch_fallback
 EOS
 	read MACHINE_ID < /etc/machine-id
-	cmdline="rw"
-	write_file $target/boot/loader/entries/arch.conf <<EOS
+	cmdline="rw" #use autodection to find slash
+	write_file $rootfs/boot/loader/entries/arch.conf <<EOS
 title Arch Linux
 version current
 machine-id $MACHINE_ID
@@ -93,7 +95,7 @@ linux /vmlinuz-linux
 initrd /initramfs-linux.img
 options $cmdline
 EOS
-	write_file $target/boot/loader/entries/arch_fallback.conf <<EOS
+	write_file $rootfs/boot/loader/entries/arch_fallback.conf <<EOS
 title Arch Linux
 version fallback
 machine-id $MACHINE_ID
@@ -105,27 +107,51 @@ EOS
 
 prepare_boot() {
 	echo "# Boot"
-	sudo arch-chroot $target bootctl install --no-variables
-	sudo pacstrap -GMcd $target --needed linux
+	arch-chroot $rootfs bootctl install --no-variables
+	pacstrap -GMcd $rootfs --needed linux
 	write_mkinitcpio
 	write_systemd_boot
-	sudo arch-chroot $target mkinitcpio -p linux
+	arch-chroot $rootfs mkinitcpio -p linux
 	#Use kernel-install:
-	#sudo sh -c "echo rw > $target/etc/kernel/cmdline" #use autodection to find slash
-	#sudo systemd-nspawn -D $target sh -c 'kernel-install add $(uname -r) /boot/vmlinuz-linux'
+	#echo rw > $rootfs/etc/kernel/cmdline	
+	##systemd-nspawn -D $rootfs sh -c 'kernel-install add $(uname -r) /boot/vmlinuz-linux'
 }
 
 cleanup() {
+	set +e;
 	echo "# Cleanup"
 	case $machine_type in
 		raw)
 			#unmount
-			sudo umount $target/boot; sudo umount $target
+			if [[ -n $rootfs ]]; then
+				umount $rootfs/boot; umount $rootfs
+			fi
+			[[ $DISK == /dev/loop* ]] && losetup -d $DISK
 			;;
 	esac
 }
 
-boot=
+default_bootstrap() {
+	prepare
+	init
+	configure
+	[[ -n $boot ]] && prepare_boot
+}
+
+#allows other scripts to source arch_img and change bootstrap()
+declare -f bootstrap >/dev/null || bootstrap() {
+	default_bootstrap
+}
+
+trap '
+  ret=$?;
+  cleanup
+  [[ $ret -ne 0 ]] && echo "FAILED TO GENERATE IMAGE" >&2
+  exit $ret;
+  ' EXIT
+# clean up also after a SIGINT
+trap 'exit 1;' SIGINT
+
 while true;
 do
   case $1 in
@@ -139,18 +165,25 @@ done
 
 [[ -z $machine_type ]] && machine_type="btrfs"
 name=$1; shift
-[[ -z $name ]] && exit 1
+if [[ $EUID != 0 ]]; then
+	echo "Must be run as root"
+	exit 1
+fi
+if [[ -z $name ]]; then
+	echo "No name provided"
+	exit 1
+fi
 if [[ $# > 0 ]]; then
 	for func in $@; do
 		eval $func
 	done
 else
-	prepare
-	init
-	configure
-	[[ -n $boot ]] && prepare_boot
-	cleanup
+	bootstrap
 fi
+
+#Build:
+#sudo arch_img arch-container #container
+#sudo arch_img -b -t raw arch-virtual #bootable raw disk for qemu
 
 #systemd-nspawn:
 #sudo machinectl start arch-container (-> sudo systemd-nspawn -bnM arch-container)
