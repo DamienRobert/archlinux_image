@@ -218,22 +218,17 @@ script_launch() {
 	script_checkup
 	set -e
 	script_run
+	cleanup
 }
 
 trap_cleanup() {
 	ret=$?;
+	trap '' EXIT ERR # some shells will call EXIT or ERR after the INT handler
 	cleanup
-	[[ $ret -ne 0 ]] && error "FAILED TO GENERATE IMAGE"
+	[[ $ret -ne 0 ]] && error "Failed to generate image"
 	exit $ret;
 }
-sigtrap_cleanup() {
-	#see http://unix.stackexchange.com/questions/57940/trap-int-term-exit-really-necessary
-	trap '' EXIT # some shells will call EXIT after the INT handler
-	trap_cleanup
-}
-
-trap trap_cleanup EXIT ERR
-trap sigtrap_cleanup INT QUIT TERM
+trap trap_cleanup ERR
 
 script_launch $@
 
