@@ -6,25 +6,29 @@ set -e
 # Stolen from arch-install-script
 out() { printf "$1 $2\n" "${@:3}"; }
 error() { out "==> ERROR:" "$@"; } >&2
-msg() { out "==>" "$@"; }
-msg2() { out "  ->" "$@";}
+msg() { out "->" "$@"; }
+msg2() { out "-" "$@";}
+header() {out "#" "$@";}
+header2() {out "##" "$@";}
 die() { error "$@"; exit 1; }
+
+show() { echo "=> $@"; $@ }
 
 write_file() {
 	local file=$1
-	echo "- Writing $file"
+	msg2 "Writing $file"
 	cat >$file
 }
 
 pacstrap_cmd() {
-	pacstrap $pacstrap_options $rootfs $pacman_options $@
+	show pacstrap $pacstrap_options $rootfs $pacman_options $@
 }
 
 prepare_subvolume() {
-	#btrfs subvolume
+	header2 "Prepare btrfs subvolume"
 	rootfs="/var/lib/machines/$name"
 	[[ -e $rootfs ]] && die "$rootfs exists"
-	btrfs subvolume create $rootfs
+	show btrfs subvolume create $rootfs
 }
 
 make_raw() {
@@ -32,32 +36,34 @@ make_raw() {
 	[[ -e $raw ]] && die "$raw exists"
 	touch $raw
 	chattr +C $raw
-	fallocate -l 1G $raw #dd of=$name.raw bs=1 seek=1G count=0
+	show fallocate -l 1G $raw #dd of=$name.raw bs=1 seek=1G count=0
 }
 
 do_partition() {
+	header2 "Setup partitions"
 	BOOTPARTLABEL='boot' SLASHPARTLABEL='slash'
-	sgdisk -n 1:0:+100M -c "0:$BOOTPARTLABEL" -t '0:ef00' --attributes=1:set:2	-n 2:0:0 -c "0:$SLASHPARTLABEL" -t '0:8304' $DISK
+	show sgdisk -n 1:0:+100M -c "0:$BOOTPARTLABEL" -t '0:ef00' --attributes=1:set:2	-n 2:0:0 -c "0:$SLASHPARTLABEL" -t '0:8304' $DISK
 	bootpart=${DISK}1
 	slashpart=${DISK}2
 }
 
 do_mkfs() {
-	mkfs.vfat $bootpart
-	mkfs.ext4 $slashpart
+	header2 "Setup filesystems"
+	show mkfs.vfat $bootpart
+	show mkfs.ext4 $slashpart
 }
 
 do_mount() {
-	mkdir -p $rootfs && mount ${DISK}p2 $rootfs
-	mkdir -p $rootfs/boot && mount ${DISK}p1 $rootfs/boot
+	mkdir -p $rootfs && show mount ${DISK}p2 $rootfs
+	mkdir -p $rootfs/boot && show mount ${DISK}p1 $rootfs/boot
 }
 
 do_umount() {
-	umount $rootfs/boot; umount $rootfs
+	show umount $rootfs/boot; show umount $rootfs
 }
 
 prepare_raw() {
-	#raw image
+	header2 "Prepare raw image"
 	make_raw
 	DISK=$(losetup -f --show $raw)
 	[[ -z $DISK ]] && die "losetup failed"
@@ -71,7 +77,7 @@ prepare_raw() {
 }
 
 prepare() {
-	echo "# Prepare"
+	header "Prepare"
 	case $machine_type in
 		btrfs)
 			prepare_subvolume
@@ -83,13 +89,14 @@ prepare() {
 }
 
 init() {
-	echo "# Init"
+	header "Init"
 	pacstrap_cmd $pkgs
 }
 
 enable_networkd() {
+	header2 "Setup network"
 	ln -snf /run/systemd/resolve/resolv.conf $rootfs/etc/
-	sed -i -e 's/^hosts:.*/hosts: files mymachines resolve myhostname/' $rootfs/etc/nsswitch.conf
+	sed -i -e 's/^hosts:.*/hosts: files mymachines resolve [!UNAVAIL=return] dns myhostname/' $rootfs/etc/nsswitch.conf
 	write_file $rootfs/etc/systemd/network/30-dhcp.network <<EOS
 [Match]
 Name=en*
@@ -99,13 +106,17 @@ IPForward=yes
 EOS
 }
 
+enable_ssh() {
+	[[ -n $ssh_key ]] && msg "Enable ssh key $ssh_key" && mkdir -p $rootfs/root/.ssh && install -m 600 $ssh_key $rootfs/root/.ssh/authorized_keys
+}
+
 configure() {
-	echo "# Configure"
-	systemd-firstboot --root=$rootfs --hostname=$name
-	systemctl --root=$rootfs preset-all
+	header "Configure"
+	show systemd-firstboot --root=$rootfs --hostname=$name
+	show systemctl --root=$rootfs preset-all
 	enable_networkd
-	systemctl --root=$rootfs enable sshd.socket
-	[[ -n $ssh_key ]] && mkdir -p $rootfs/root/.ssh && install -m 600 $ssh_key $rootfs/root/.ssh/authorized_keys
+	show systemctl --root=$rootfs enable sshd.socket
+	enable_ssh
 }
 
 write_mkinitcpio() {
@@ -140,12 +151,13 @@ EOS
 }
 
 setup_bootloader() {
-	echo "# Boot"
+	header "Boot"
 	arch-chroot $rootfs bootctl install --no-variables
-	pacstrap_cmd linux
+	#install mkinitcpio first so that when linux is installed 'mkinitcpio -p linux' is run with the correct config file
+	pacstrap_cmd mkinitcpio
 	write_mkinitcpio
+	pacstrap_cmd linux
 	write_systemd_boot
-	arch-chroot $rootfs mkinitcpio -p linux
 	##Use kernel-install:
 	#echo rw > $rootfs/etc/kernel/cmdline
 	#systemd-nspawn -D $rootfs sh -c 'kernel-install add $(uname -r) /boot/vmlinuz-linux'
@@ -153,7 +165,7 @@ setup_bootloader() {
 
 cleanup() {
 	set +e;
-	echo "# Cleanup"
+	header "Cleanup"
 	case $machine_type in
 		raw)
 			[[ -n $rootfs ]] && do_umount
@@ -181,13 +193,13 @@ script_options() {
 script_setup() {
 	[[ -z $machine_type ]] && machine_type="btrfs"
 	if [[ -z $pkgs ]]; then
-		pkgs=($(ruby -e 'puts (%x/pacman -Sqg base/.split("\n")-%w(mdadm lvm2 cryptsetup device-mapper xfsprogs reiserfsprogs jfsutils man-pages man-db pcmciautils inetutils dhcpcd netctl s-nail licenses texinfo linux)).join(" ")'))
+		pkgs=($(ruby -e 'puts (%x/pacman -Sqg base/.split("\n")-%w(mdadm lvm2 cryptsetup device-mapper xfsprogs reiserfsprogs jfsutils man-pages man-db pcmciautils inetutils dhcpcd netctl s-nail licenses texinfo bzip2 linux)).join(" ")'))
 		pkgs+=(openssh sudo)
 	fi
 	default_runlist=(prepare init ${boot:+setup_bootloader} configure)
 	[[ -z $runlist ]] && runlist=($default_runlist)
 	[[ -z $pacstrap_options ]] && pacstrap_options=("-GMcd")
-	[[ -z $pacman_options ]] && pacstrap_options=("--needed")
+	[[ -z $pacman_options ]] && pacman_options=("--needed")
 
 	trap '
 		ret=$?;
@@ -218,7 +230,6 @@ script_launch() {
 }
 
 script_launch $@
-
 
 #Build:
 #sudo arch_img arch-container #container
