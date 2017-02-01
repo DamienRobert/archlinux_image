@@ -220,17 +220,20 @@ script_launch() {
 	script_run
 }
 
-trap_cmd=<<EOS
-  ret=$?;
-  cleanup
-  [[ $ret -ne 0 ]] && error "FAILED TO GENERATE IMAGE"
-  exit $ret;
-EOS
+trap_cleanup() {
+	ret=$?;
+	cleanup
+	[[ $ret -ne 0 ]] && error "FAILED TO GENERATE IMAGE"
+	exit $ret;
+}
+sigtrap_cleanup() {
+	#see http://unix.stackexchange.com/questions/57940/trap-int-term-exit-really-necessary
+	trap '' EXIT # some shells will call EXIT after the INT handler
+	trap_cleanup
+}
 
-trap $trap_cmd EXIT
-trap $trap_cmd ERR
-# clean up also after a SIGINT
-trap 'exit 1;' SIGINT
+trap trap_cleanup EXIT ERR
+trap sigtrap_cleanup INT QUIT TERM
 
 script_launch $@
 
