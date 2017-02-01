@@ -1,7 +1,6 @@
 #!/bin/zsh
 #Inspired by https://github.com/lucasdemarchi/toolbox/blob/master/arch-installer.sh
 #requirements: arch-install-scripts
-set -e
 
 # Stolen from arch-install-script
 out() { printf "$1 $2\n" "${@:3}"; }
@@ -164,7 +163,8 @@ setup_bootloader() {
 }
 
 cleanup() {
-	set +e;
+	set +e; #don't exit on errors for clean up
+	trap '' ERR INT QUIT TERM #clear any trap we might have
 	header "Cleanup"
 	case $machine_type in
 		raw)
@@ -200,15 +200,6 @@ script_setup() {
 	[[ -z $runlist ]] && runlist=($default_runlist)
 	[[ -z $pacstrap_options ]] && pacstrap_options=("-GMcd")
 	[[ -z $pacman_options ]] && pacman_options=("--needed")
-
-	trap '
-		ret=$?;
-		cleanup
-		[[ $ret -ne 0 ]] && echo "FAILED TO GENERATE IMAGE" >&2
-		exit $ret;
-		' EXIT
-	# clean up also after a SIGINT
-	trap 'exit 1;' SIGINT
 }
 
 script_checkup() {
@@ -222,11 +213,22 @@ script_run() {
 	done
 }
 
+trap_cleanup() {
+	ret=$?;
+	cleanup
+	error "Failed to generate image (signal received: $ret)"
+	exit $ret;
+}
+
 script_launch() {
 	script_options $@
 	script_setup
 	script_checkup
+	#From now on exit if a command gives an error
+	set -e
+	trap trap_cleanup ERR INT QUIT TERM
 	script_run
+	cleanup
 }
 
 script_launch $@
