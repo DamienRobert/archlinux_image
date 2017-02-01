@@ -1,7 +1,6 @@
 #!/bin/zsh
 #Inspired by https://github.com/lucasdemarchi/toolbox/blob/master/arch-installer.sh
 #requirements: arch-install-scripts
-set -e
 
 # Stolen from arch-install-script
 out() { printf "$1 $2\n" "${@:3}"; }
@@ -217,15 +216,19 @@ script_launch() {
 	script_options $@
 	script_setup
 	script_checkup
+	set -e
 	script_run
 }
 
-trap '
-	ret=$?;
-	cleanup
-	[[ $ret -ne 0 ]] && echo "FAILED TO GENERATE IMAGE" >&2
-	exit $ret;
-	' EXIT
+trap_cmd=<<EOS
+  ret=$?;
+  cleanup
+  [[ $ret -ne 0 ]] && error "FAILED TO GENERATE IMAGE"
+  exit $ret;
+EOS
+
+trap $trap_cmd EXIT
+trap $trap_cmd ERR
 # clean up also after a SIGINT
 trap 'exit 1;' SIGINT
 
