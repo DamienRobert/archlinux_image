@@ -163,7 +163,8 @@ setup_bootloader() {
 }
 
 cleanup() {
-	set +e;
+	set +e; #don't exit on errors for clean up
+	trap '' ERR INT QUIT TERM #clear any trap we might have
 	header "Cleanup"
 	case $machine_type in
 		raw)
@@ -216,7 +217,9 @@ script_launch() {
 	script_options $@
 	script_setup
 	script_checkup
+	#From now on exit if a command gives an error
 	set -e
+	trap trap_cleanup ERR
 	script_run
 	cleanup
 }
