@@ -200,15 +200,6 @@ script_setup() {
 	[[ -z $runlist ]] && runlist=($default_runlist)
 	[[ -z $pacstrap_options ]] && pacstrap_options=("-GMcd")
 	[[ -z $pacman_options ]] && pacman_options=("--needed")
-
-	trap '
-		ret=$?;
-		cleanup
-		[[ $ret -ne 0 ]] && echo "FAILED TO GENERATE IMAGE" >&2
-		exit $ret;
-		' EXIT
-	# clean up also after a SIGINT
-	trap 'exit 1;' SIGINT
 }
 
 script_checkup() {
@@ -228,6 +219,15 @@ script_launch() {
 	script_checkup
 	script_run
 }
+
+trap '
+	ret=$?;
+	cleanup
+	[[ $ret -ne 0 ]] && echo "FAILED TO GENERATE IMAGE" >&2
+	exit $ret;
+	' EXIT
+# clean up also after a SIGINT
+trap 'exit 1;' SIGINT
 
 script_launch $@
 
