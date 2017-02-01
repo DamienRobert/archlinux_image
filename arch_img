@@ -223,12 +223,11 @@ script_launch() {
 
 trap_cleanup() {
 	ret=$?;
-	trap '' EXIT ERR # some shells will call EXIT or ERR after the INT handler
 	cleanup
-	[[ $ret -ne 0 ]] && error "Failed to generate image"
+	error "Failed to generate image (signal received: $ret)"
 	exit $ret;
 }
-trap trap_cleanup ERR
+trap trap_cleanup INT QUIT TERM
 
 script_launch $@
 
