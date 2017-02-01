@@ -32,7 +32,7 @@ make_raw() {
 	[[ -e $raw ]] && die "$raw exists"
 	touch $raw
 	chattr +C $raw
-	fallocate -l 1G $raw #dd of=archlinux.raw bs=1 seek=1G count=0
+	fallocate -l 1G $raw #dd of=$name.raw bs=1 seek=1G count=0
 }
 
 do_partition() {
@@ -146,9 +146,9 @@ setup_bootloader() {
 	write_mkinitcpio
 	write_systemd_boot
 	arch-chroot $rootfs mkinitcpio -p linux
-	#Use kernel-install:
-	#echo rw > $rootfs/etc/kernel/cmdline	
-	##systemd-nspawn -D $rootfs sh -c 'kernel-install add $(uname -r) /boot/vmlinuz-linux'
+	##Use kernel-install:
+	#echo rw > $rootfs/etc/kernel/cmdline
+	#systemd-nspawn -D $rootfs sh -c 'kernel-install add $(uname -r) /boot/vmlinuz-linux'
 }
 
 cleanup() {
@@ -228,6 +228,8 @@ script_launch $@
 #sudo machinectl start arch-container (-> sudo systemd-nspawn -bnM arch-container)
 #sudo machinectl poweroff arch-container
 #sudo machinectl remove arch-container
+#sudo systemd-nspawn -bni /var/lib/machines/arch-virtual.raw
 
-#qemu:
-#qemu-system-x86_64 -m 256 -machine accel=kvm -bios /usr/share/ovmf/ovmf_x64.bin -drive format=raw,file=/var/lib/machines/arch-virtual.raw
+#qemu: (needs 'ovmf' package for uefi)
+#sudo qemu-system-x86_64 -m 256 -machine accel=kvm -bios /usr/share/ovmf/ovmf_x64.bin -drive format=raw,file=/var/lib/machines/arch-virtual.raw
+
