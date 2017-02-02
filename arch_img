@@ -152,11 +152,9 @@ EOS
 setup_bootloader() {
 	header "Boot"
 	arch-chroot $rootfs bootctl install --no-variables
-	#install mkinitcpio first so that when linux is installed 'mkinitcpio -p linux' is run with the correct config file
-	pacstrap_cmd mkinitcpio
 	write_mkinitcpio
-	pacstrap_cmd linux
 	write_systemd_boot
+	arch-chroot $rootfs mkinitcpio -p linux
 	##Use kernel-install:
 	#echo rw > $rootfs/etc/kernel/cmdline
 	#systemd-nspawn -D $rootfs sh -c 'kernel-install add $(uname -r) /boot/vmlinuz-linux'
@@ -193,8 +191,17 @@ script_options() {
 script_setup() {
 	[[ -z $machine_type ]] && machine_type="btrfs"
 	if [[ -z $pkgs ]]; then
-		pkgs=($(ruby -e 'puts (%x/pacman -Sqg base/.split("\n")-%w(mdadm lvm2 cryptsetup device-mapper xfsprogs reiserfsprogs jfsutils man-pages man-db pcmciautils inetutils dhcpcd netctl s-nail licenses texinfo bzip2 linux)).join(" ")'))
-		pkgs+=(openssh sudo)
+		#we don't need these on a container; they may be needed on a virtual
+		#image, to add on a case by case basis
+		fsutils=(mdadm lvm2 cryptsetup device-mapper xfsprogs reiserfsprogs jfsutils e2fsprogs)
+		busutils=(pcmciautils pciutils usbutils)
+		netutils=(inetutils dhcpcd netctl s-nail)
+		docutils=(man-pages man-db texinfo licenses)
+		miscutils=(bzip2 psmisc nano)
+		notneeded=($fsutils $busutils $netutils $docutils$ $miscutils linux)
+		pkgs=($(pacman -Sqg base))
+		pkgs=(${pkgs:|notneeded})
+		pkgs+=(openssh sudo ${boot:+linux})
 	fi
 	default_runlist=(prepare init ${boot:+setup_bootloader} configure)
 	[[ -z $runlist ]] && runlist=($default_runlist)
