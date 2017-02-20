@@ -18,4 +18,4 @@ sudo arch_img -b -t raw arch-virtual #bootable raw disk for qemu
 
 Copyright © 2015–2017 Damien Robert
 
-MIT License. See LICENSE.txt for details.
+MIT License. See [LICENSE.txt](./LICENSE.txt) for details.
