@@ -205,7 +205,7 @@ script_setup() {
 	fi
 	default_runlist=(prepare init ${boot:+setup_bootloader} configure)
 	[[ -z $runlist ]] && runlist=($default_runlist)
-	[[ -z $pacstrap_options ]] && pacstrap_options=("-GMcd")
+	[[ -z $pacstrap_options ]] && pacstrap_options=("-GMc")
 	[[ -z $pacman_options ]] && pacman_options=("--needed")
 }
 
